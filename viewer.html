@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>แสดงผล + พยากรณ์ตำแหน่ง (10 วิ)</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto; margin:16px; line-height:1.35}
+    .wrap{max-width:980px;margin:auto;display:grid;gap:12px}
+    .card{padding:12px;border:1px solid #ddd;border-radius:12px}
+    select,input,button{padding:10px;border-radius:10px;border:1px solid #ccc;font-size:16px}
+    button{border:none;background:#0ea5e9;color:#fff;font-weight:800}
+    button:disabled{opacity:.6}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .muted{color:#666;font-size:13px}
+    code{background:#f3f4f6;padding:2px 6px;border-radius:6px}
+    #map{height:440px;border-radius:12px}
+    .ok{color:#16a34a;font-weight:800}
+    .err{color:#dc2626;font-weight:800}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <label class="muted">สาย:</label>
+      <select id="route">
+        <option value="สาย 1">สาย 1</option>
+        <option value="สาย 2">สาย 2</option>
+      </select>
+
+      <label class="muted">vehicleId:</label>
+      <input id="vehicleId" placeholder="เช่น S1-1" style="min-width:170px">
+
+      <button id="start">เริ่ม (อัปเดตทุก 10 วิ)</button>
+      <button id="stop" disabled>หยุด</button>
+      <span class="muted">พยากรณ์ทุก <b>10 วินาที</b></span>
+    </div>
+    <div id="status" class="muted" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <div class="muted">ผลคำนวณล่าสุด</div>
+    <div id="info"></div>
+  </div>
+
+  <div id="map" class="card"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // ✅ ใส่ Apps Script Web App URL (/exec)
+  const API_URL = "https://script.google.com/macros/s/AKfycbzph53toZW_Neld33MlVjCle9aTGpjABt4ejlRM4-WfvFH_9OeKIk3M6J4A3Z0fkgPHHw/exec";
+
+  // ===== ตั้งค่า =====
+  const PRED_SEC = 10;  // พยากรณ์ 10 วิ
+  const V_STOP = 0.6;   // m/s ต่ำกว่านี้ถือว่า "จอด"
+  // ===================
+
+  const toRad = d => (d * Math.PI) / 180;
+  const toDeg = r => (r * 180) / Math.PI;
+  const R = 6371000;
+
+  function haversineMeters(lat1,lng1,lat2,lng2){
+    const φ1=toRad(lat1), φ2=toRad(lat2);
+    const dφ=toRad(lat2-lat1), dλ=toRad(lng2-lng1);
+    const a=Math.sin(dφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;
+    return 2*R*Math.asin(Math.sqrt(a));
+  }
+  function bearingRad(lat1,lng1,lat2,lng2){
+    const φ1=toRad(lat1), φ2=toRad(lat2);
+    const dλ=toRad(lng2-lng1);
+    const y=Math.sin(dλ)*Math.cos(φ2);
+    const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(dλ);
+    return Math.atan2(y,x);
+  }
+  function destinationPoint(lat,lng,brngRad,distM){
+    const φ1=toRad(lat), λ1=toRad(lng);
+    const δ=distM/R;
+    const φ2=Math.asin(Math.sin(φ1)*Math.cos(δ)+Math.cos(φ1)*Math.sin(δ)*Math.cos(brngRad));
+    const λ2=λ1+Math.atan2(Math.sin(brngRad)*Math.sin(δ)*Math.cos(φ1), Math.cos(δ)-Math.sin(φ1)*Math.sin(φ2));
+    return { lat: toDeg(φ2), lng: toDeg(λ2) };
+  }
+
+  // ===== พยากรณ์ 2 แบบ =====
+  function predict2points(p1, p2){
+    const t1 = new Date(p1.timestamp).getTime();
+    const t2 = new Date(p2.timestamp).getTime();
+    const dt = (t2 - t1) / 1000;
+    if(dt <= 0) throw new Error("เวลาไม่ถูกต้อง (dt<=0)");
+
+    const d = haversineMeters(p1.lat,p1.lng,p2.lat,p2.lng);
+    const v = d / dt;
+    const brng = bearingRad(p1.lat,p1.lng,p2.lat,p2.lng);
+
+    // (A) ไม่คำนึงจอด
+    const noStop = destinationPoint(p2.lat, p2.lng, brng, v * PRED_SEC);
+
+    // (B) คำนึงจอดแบบไม่มีพิกัดป้าย (rule + blending)
+    let stopAware;
+    if(v < V_STOP){
+      stopAware = { lat: p2.lat, lng: p2.lng, mode: "STOPPED" };
+    } else {
+      let pStop = 0.15;
+      if (v < 2.0) pStop = 0.30; // วิ่งช้า โอกาสจอดสูงขึ้น
+      stopAware = {
+        lat: (1 - pStop) * noStop.lat + pStop * p2.lat,
+        lng: (1 - pStop) * noStop.lng + pStop * p2.lng,
+        mode: "MOVING(blended)",
+        pStop
+      };
+    }
+
+    return { dt, d, v, noStop, stopAware };
+  }
+
+  async function fetchLast2(route, vehicleId){
+    const url = `${API_URL}?action=latest&route=${encodeURIComponent(route)}&vehicleId=${encodeURIComponent(vehicleId)}&limit=2`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || "API error");
+    if(!data.points || data.points.length < 2) throw new Error("ข้อมูลไม่พอ (ต้องมี 2 จุด)");
+    return data.points;
+  }
+
+  // ===== UI + Map =====
+  const statusEl = document.getElementById("status");
+  const infoEl = document.getElementById("info");
+  const routeEl = document.getElementById("route");
+  const vehicleEl = document.getElementById("vehicleId");
+  const startBtn = document.getElementById("start");
+  const stopBtn = document.getElementById("stop");
+
+  function setStatus(msg, type="muted"){
+    statusEl.className = type === "err" ? "err" : type === "ok" ? "ok" : "muted";
+    statusEl.textContent = msg;
+  }
+
+  // auto-fill จาก query
+  const qs = new URLSearchParams(location.search);
+  if(qs.get("route")) routeEl.value = qs.get("route");
+  if(qs.get("vehicleId")) vehicleEl.value = qs.get("vehicleId");
+
+  const map = L.map('map').setView([14.02, 99.98], 14); // ปรับให้ใกล้พื้นที่จริง
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  const mLast = L.marker([14.02, 99.98]).addTo(map).bindPopup("ตำแหน่งล่าสุด");
+  const mNoStop = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (ไม่คำนึงจอด)");
+  const mStopAware = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (คำนึงจอด)");
+
+  let timer = null;
+
+  async function tick(){
+    const route = routeEl.value.trim();
+    const vehicleId = vehicleEl.value.trim();
+    if(!route) throw new Error("กรุณาเลือกสาย");
+    if(!vehicleId) throw new Error("กรุณากรอก vehicleId");
+
+    setStatus(`กำลังดึง 2 จุดล่าสุด: ${route} / ${vehicleId} …`);
+
+    const pts = await fetchLast2(route, vehicleId);
+    const p1 = pts[0], p2 = pts[1];
+    const out = predict2points(p1, p2);
+
+    // update map markers
+    mLast.setLatLng([p2.lat, p2.lng]);
+    mNoStop.setLatLng([out.noStop.lat, out.noStop.lng]);
+    mStopAware.setLatLng([out.stopAware.lat, out.stopAware.lng]);
+
+    map.fitBounds(L.latLngBounds([
+      [p2.lat, p2.lng],
+      [out.noStop.lat, out.noStop.lng],
+      [out.stopAware.lat, out.stopAware.lng],
+    ]), { padding: [30,30] });
+
+    infoEl.innerHTML = `
+      <div class="muted" style="margin-top:8px;">
+        จุดก่อนหน้า: <code>${p1.lat.toFixed(6)}, ${p1.lng.toFixed(6)}</code> เวลา <code>${p1.timestamp}</code><br/>
+        จุดล่าสุด: <code>${p2.lat.toFixed(6)}, ${p2.lng.toFixed(6)}</code> เวลา <code>${p2.timestamp}</code><br/><br/>
+
+        dt = <code>${out.dt.toFixed(1)}s</code>,
+        distance = <code>${out.d.toFixed(1)}m</code>,
+        speed = <code>${out.v.toFixed(2)}m/s</code> (~<code>${(out.v*3.6).toFixed(1)} km/h</code>)<br/><br/>
+
+        <b>พยากรณ์ 10 วิ (ไม่คำนึงจอด):</b>
+        <code>${out.noStop.lat.toFixed(6)}, ${out.noStop.lng.toFixed(6)}</code><br/>
+
+        <b>พยากรณ์ 10 วิ (คำนึงจอด):</b>
+        <code>${out.stopAware.lat.toFixed(6)}, ${out.stopAware.lng.toFixed(6)}</code>
+        <span class="muted">(${out.stopAware.mode}${out.stopAware.pStop ? `, pStop=${out.stopAware.pStop}` : ""})</span>
+      </div>
+    `;
+
+    setStatus(`อัปเดตสำเร็จ ✅ (${route} / ${vehicleId})`, "ok");
+  }
+
+  startBtn.addEventListener("click", async () => {
+    try{
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      await tick(); // ทันที
+      timer = setInterval(() => tick().catch(err => setStatus(String(err), "err")), PRED_SEC * 1000);
+
+    }catch(err){
+      setStatus(String(err), "err");
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+  });
+
+  stopBtn.addEventListener("click", () => {
+    if(timer) clearInterval(timer);
+    timer = null;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus("หยุดแล้ว");
+  });
+</script>
+</body>
+</html>
