@@ -144,8 +144,10 @@
   if(qs.get("vehicleId")) vehicleEl.value = qs.get("vehicleId");
 
   const map = L.map('map').setView([14.02, 99.98], 14); // ปรับให้ใกล้พื้นที่จริง
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap &copy; CARTO'
+}).addTo(map);
   const mLast = L.marker([14.02, 99.98]).addTo(map).bindPopup("ตำแหน่งล่าสุด");
   const mNoStop = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (ไม่คำนึงจอด)");
   const mStopAware = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (คำนึงจอด)");
@@ -289,3 +291,4 @@
 </script>
 </body>
 </html>
+
