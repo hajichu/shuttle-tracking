@@ -51,13 +51,10 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  // ✅ ใส่ Apps Script Web App URL (/exec)
   const API_URL = "https://script.google.com/macros/s/AKfycbzph53toZW_Neld33MlVjCle9aTGpjABt4ejlRM4-WfvFH_9OeKIk3M6J4A3Z0fkgPHHw/exec";
 
-  // ===== ตั้งค่า =====
-  const PRED_SEC = 10;  // พยากรณ์ 10 วิ
-  const V_STOP = 0.6;   // m/s ต่ำกว่านี้ถือว่า "จอด"
-  // ===================
+  const PRED_SEC = 10;
+  const V_STOP = 0.6;
 
   const toRad = d => (d * Math.PI) / 180;
   const toDeg = r => (r * 180) / Math.PI;
@@ -84,7 +81,6 @@
     return { lat: toDeg(φ2), lng: toDeg(λ2) };
   }
 
-  // ===== พยากรณ์ 2 แบบ =====
   function predict2points(p1, p2){
     const t1 = new Date(p1.timestamp).getTime();
     const t2 = new Date(p2.timestamp).getTime();
@@ -95,16 +91,14 @@
     const v = d / dt;
     const brng = bearingRad(p1.lat,p1.lng,p2.lat,p2.lng);
 
-    // (A) ไม่คำนึงจอด
     const noStop = destinationPoint(p2.lat, p2.lng, brng, v * PRED_SEC);
 
-    // (B) คำนึงจอดแบบไม่มีพิกัดป้าย (rule + blending)
     let stopAware;
     if(v < V_STOP){
       stopAware = { lat: p2.lat, lng: p2.lng, mode: "STOPPED" };
     } else {
       let pStop = 0.15;
-      if (v < 2.0) pStop = 0.30; // วิ่งช้า โอกาสจอดสูงขึ้น
+      if (v < 2.0) pStop = 0.30;
       stopAware = {
         lat: (1 - pStop) * noStop.lat + pStop * p2.lat,
         lng: (1 - pStop) * noStop.lng + pStop * p2.lng,
@@ -112,7 +106,6 @@
         pStop
       };
     }
-
     return { dt, d, v, noStop, stopAware };
   }
 
@@ -125,7 +118,6 @@
     return data.points;
   }
 
-  // ===== UI + Map =====
   const statusEl = document.getElementById("status");
   const infoEl = document.getElementById("info");
   const routeEl = document.getElementById("route");
@@ -138,60 +130,72 @@
     statusEl.textContent = msg;
   }
 
-  // auto-fill จาก query
   const qs = new URLSearchParams(location.search);
   if(qs.get("route")) routeEl.value = qs.get("route");
   if(qs.get("vehicleId")) vehicleEl.value = qs.get("vehicleId");
 
-  const map = L.map('map').setView([14.02, 99.98], 14); // ปรับให้ใกล้พื้นที่จริง
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-  maxZoom: 19,
-  attribution: '&copy; OpenStreetMap &copy; CARTO'
-}).addTo(map);
+  const map = L.map('map').setView([14.02, 99.98], 14);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap &copy; CARTO'
+  }).addTo(map);
+
   const mLast = L.marker([14.02, 99.98]).addTo(map).bindPopup("ตำแหน่งล่าสุด");
   const mNoStop = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (ไม่คำนึงจอด)");
   const mStopAware = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (คำนึงจอด)");
 
-  // ===== ROUTE LINE (โหลดจากไฟล์ txt แล้ววาดเส้น) =====
+  // ===== ROUTE LINE (อ่านไฟล์ clean แล้ววาดเส้น) =====
   let routeLine = null;
+  let timer = null;
 
-  function parseLatLngText(text) {
-    // ดึงเฉพาะเลขทศนิยมทั้งหมดออกมา แล้วจับคู่ (lat,lng)
-    const nums = (text.match(/-?\d+\.\d+/g) || []).map(Number);
+  // ✅ parse แบบ "lat lng" หรือ "lat,lng" ต่อ 1 บรรทัด (ไฟล์ clean ใช้แบบนี้)
+  function parseCleanLatLng(text){
     const pts = [];
-    for (let i = 0; i + 1 < nums.length; i += 2) {
-      const lat = nums[i], lng = nums[i + 1];
-      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) pts.push([lat, lng]);
+    const lines = text.split(/\r?\n/);
+    for (const line of lines){
+      const s = line.trim();
+      if(!s) continue;
+
+      // รองรับ: "14.02 99.98" หรือ "14.02,99.98"
+      const parts = s.split(/[,\s]+/).filter(Boolean);
+      if(parts.length < 2) continue;
+
+      const lat = Number(parts[0]);
+      const lng = Number(parts[1]);
+      if(Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180){
+        pts.push([lat, lng]);
+      }
     }
     return pts;
   }
 
   async function loadAndRenderRoute(routeName) {
     const file =
-      routeName === "สาย 1" ? "./routes/route1.txt" :
-      routeName === "สาย 2" ? "./routes/route2.txt" :
+      routeName === "สาย 1" ? "./routes/route1_clean.txt" :
+      routeName === "สาย 2" ? "./routes/route2_clean.txt" :
       null;
 
-    // ลบเส้นเก่า
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
     if (!file) return;
 
     try{
       const res = await fetch(file, { cache: "no-store" });
-      if (!res.ok) {
-        console.warn("Route file not found:", file);
-        return;
-      }
+      if (!res.ok) { console.warn("Route file not found:", file); return; }
+
       const text = await res.text();
-      const pts = parseLatLngText(text);
-      if (pts.length < 2) {
-        console.warn("Not enough route points:", routeName);
-        return;
-      }
+      const pts = parseCleanLatLng(text);
+      if (pts.length < 2) { console.warn("Not enough route points:", routeName); return; }
 
-      routeLine = L.polyline(pts, { weight: 6, opacity: 0.85 }).addTo(map);
+      // ✅ กำหนดสี/เส้นทึบชัดเจน (กัน “เส้นประ” + กัน “สีหาย”)
+      routeLine = L.polyline(pts, {
+        color: routeName === "สาย 1" ? "#2563eb" : "#16a34a", // น้ำเงิน / เขียว
+        weight: 6,
+        opacity: 0.9,
+        lineCap: "round",
+        lineJoin: "round",
+        dashArray: null   // ✅ บังคับให้ “ไม่เป็นเส้นประ”
+      }).addTo(map);
 
-      // ถ้ายังไม่ได้เริ่มติดตามรถ ให้ซูมให้เห็นเส้นทางก่อน
       if(!timer){
         map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
       }
@@ -208,8 +212,6 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
     loadAndRenderRoute(routeEl.value.trim());
   });
 
-  let timer = null;
-
   async function tick(){
     const route = routeEl.value.trim();
     const vehicleId = vehicleEl.value.trim();
@@ -222,12 +224,10 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
     const p1 = pts[0], p2 = pts[1];
     const out = predict2points(p1, p2);
 
-    // update map markers
     mLast.setLatLng([p2.lat, p2.lng]);
     mNoStop.setLatLng([out.noStop.lat, out.noStop.lng]);
     mStopAware.setLatLng([out.stopAware.lat, out.stopAware.lng]);
 
-    // ซูมให้เห็นทั้งรถ + จุดพยากรณ์ + เส้นทาง (ถ้ามี)
     const b = L.latLngBounds([
       [p2.lat, p2.lng],
       [out.noStop.lat, out.noStop.lng],
@@ -262,10 +262,8 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
       startBtn.disabled = true;
       stopBtn.disabled = false;
 
-      // เผื่อผู้ใช้เปลี่ยนสายก่อนกดเริ่ม
       await loadAndRenderRoute(routeEl.value.trim());
-
-      await tick(); // ทันที
+      await tick();
       timer = setInterval(() => tick().catch(err => setStatus(String(err), "err")), PRED_SEC * 1000);
 
     }catch(err){
@@ -281,15 +279,11 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
     startBtn.disabled = false;
     stopBtn.disabled = true;
 
-    // หยุดแล้ว: ถ้ามีเส้นทาง ให้ซูมกลับไปเห็นเส้น
     if(routeLine){
       map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
     }
-
     setStatus("หยุดแล้ว");
   });
 </script>
 </body>
 </html>
-
-
