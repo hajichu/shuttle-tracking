@@ -170,10 +170,10 @@
   }
 
   async function loadAndRenderRoute(routeName) {
-    const file =
-      routeName === "สาย 1" ? "./routes/route1_clean.txt" :
-      routeName === "สาย 2" ? "./routes/route2_clean.txt" :
-      null;
+   const file =
+  routeName === "สาย 1" ? "./route1.txt" :
+  routeName === "สาย 2" ? "./route2.txt" :
+  null;
 
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
     if (!file) return;
@@ -287,3 +287,4 @@
 </script>
 </body>
 </html>
+
