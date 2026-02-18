@@ -144,19 +144,17 @@
   const mNoStop = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (ไม่คำนึงจอด)");
   const mStopAware = L.marker([14.02, 99.98]).addTo(map).bindPopup("พยากรณ์ (คำนึงจอด)");
 
-  // ===== ROUTE LINE (อ่านไฟล์ clean แล้ววาดเส้น) =====
+  // ===== ROUTE LINE =====
   let routeLine = null;
   let timer = null;
 
-  // ✅ parse แบบ "lat lng" หรือ "lat,lng" ต่อ 1 บรรทัด (ไฟล์ clean ใช้แบบนี้)
+  // parse แบบ "lat lng" หรือ "lat,lng" ต่อ 1 บรรทัด
   function parseCleanLatLng(text){
     const pts = [];
     const lines = text.split(/\r?\n/);
     for (const line of lines){
       const s = line.trim();
       if(!s) continue;
-
-      // รองรับ: "14.02 99.98" หรือ "14.02,99.98"
       const parts = s.split(/[,\s]+/).filter(Boolean);
       if(parts.length < 2) continue;
 
@@ -169,38 +167,53 @@
     return pts;
   }
 
+  function getRouteFileUrl(routeName){
+    // ไฟล์อยู่ใน repo: routes/route1.txt, routes/route2.txt
+    const isGithubBlob = location.hostname === "github.com";
+
+    const base = isGithubBlob
+      ? "https://raw.githubusercontent.com/hajichu/shuttle-tracking/main/"
+      : ""; // ใช้ relative ปกติ (เช่น GitHub Pages / Live Server)
+
+    if (routeName === "สาย 1") return base + "routes/route1.txt";
+    if (routeName === "สาย 2") return base + "routes/route2.txt";
+    return null;
+  }
+
   async function loadAndRenderRoute(routeName) {
-   const file =
-  routeName === "สาย 1" ? "./route1.txt" :
-  routeName === "สาย 2" ? "./route2.txt" :
-  null;
+    const file = getRouteFileUrl(routeName);
 
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
     if (!file) return;
 
     try{
+      setStatus(`กำลังโหลดเส้นทาง: ${file} ...`);
+
       const res = await fetch(file, { cache: "no-store" });
-      if (!res.ok) { console.warn("Route file not found:", file); return; }
+      if (!res.ok) throw new Error(`โหลดไฟล์ไม่สำเร็จ (${res.status}): ${file}`);
 
       const text = await res.text();
       const pts = parseCleanLatLng(text);
-      if (pts.length < 2) { console.warn("Not enough route points:", routeName); return; }
+      if (pts.length < 2) throw new Error(`อ่านพิกัดได้น้อยเกินไป (${pts.length} จุด)`);
 
-      // ✅ กำหนดสี/เส้นทึบชัดเจน (กัน “เส้นประ” + กัน “สีหาย”)
       routeLine = L.polyline(pts, {
-        color: routeName === "สาย 1" ? "#2563eb" : "#16a34a", // น้ำเงิน / เขียว
+        color: routeName === "สาย 1" ? "#2563eb" : "#16a34a",
         weight: 6,
         opacity: 0.9,
         lineCap: "round",
         lineJoin: "round",
-        dashArray: null   // ✅ บังคับให้ “ไม่เป็นเส้นประ”
+        dashArray: null
       }).addTo(map);
 
+      // ถ้ายังไม่ได้ start ให้ซูมดูเส้นทางได้เลย
       if(!timer){
         map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
       }
+
+      setStatus(`โหลดเส้นทางสำเร็จ ✅ ${routeName} (${pts.length} จุด)`, "ok");
     }catch(e){
-      console.warn("Load route error:", e);
+      console.warn(e);
+      setStatus(String(e), "err");
     }
   }
 
@@ -287,4 +300,3 @@
 </script>
 </body>
 </html>
-
