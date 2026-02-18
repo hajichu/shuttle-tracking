@@ -148,32 +148,48 @@
   let routeLine = null;
   let timer = null;
 
-  // parse แบบ "lat lng" หรือ "lat,lng" ต่อ 1 บรรทัด
+  // ✅ parse แบบ "lat lng" หรือ "lat,lng" ต่อ 1 บรรทัด
+  // ✅ FIX: รองรับบรรทัดพังแบบ "lat, 9\t99.xxx" (มี 3 ค่า) และกรองค่าหลุดโลก
   function parseCleanLatLng(text){
     const pts = [];
     const lines = text.split(/\r?\n/);
+
     for (const line of lines){
       const s = line.trim();
       if(!s) continue;
+
       const parts = s.split(/[,\s]+/).filter(Boolean);
       if(parts.length < 2) continue;
 
-      const lat = Number(parts[0]);
-      const lng = Number(parts[1]);
-      if(Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180){
-        pts.push([lat, lng]);
+      let lat = Number(parts[0]);
+      let lng = Number(parts[1]);
+
+      // เคส: lat, 9\t99.97xxxx -> parts = [lat, 9, 99.97xxxx]
+      if (parts.length >= 3) {
+        const lng3 = Number(parts[2]);
+        if (Number.isFinite(lng) && lng < 20 && Number.isFinite(lng3) && lng3 > 90 && lng3 < 180) {
+          lng = lng3;
+        }
       }
+
+      if(!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      if(lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+
+      // กรองให้อยู่แถวไทย (กันหลุดโลกเวลามีค่าพัง)
+      if(lat < 13.5 || lat > 15.0 || lng < 98.5 || lng > 101.5) continue;
+
+      pts.push([lat, lng]);
     }
+
     return pts;
   }
 
   function getRouteFileUrl(routeName){
-    // ไฟล์อยู่ใน repo: routes/route1.txt, routes/route2.txt
     const isGithubBlob = location.hostname === "github.com";
 
     const base = isGithubBlob
       ? "https://raw.githubusercontent.com/hajichu/shuttle-tracking/main/"
-      : ""; // ใช้ relative ปกติ (เช่น GitHub Pages / Live Server)
+      : "";
 
     if (routeName === "สาย 1") return base + "routes/route1.txt";
     if (routeName === "สาย 2") return base + "routes/route2.txt";
@@ -205,7 +221,6 @@
         dashArray: null
       }).addTo(map);
 
-      // ถ้ายังไม่ได้ start ให้ซูมดูเส้นทางได้เลย
       if(!timer){
         map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
       }
@@ -217,10 +232,8 @@
     }
   }
 
-  // วาดเส้นครั้งแรก
   loadAndRenderRoute(routeEl.value.trim());
 
-  // เปลี่ยน route แล้วเปลี่ยนเส้น
   routeEl.addEventListener("change", () => {
     loadAndRenderRoute(routeEl.value.trim());
   });
